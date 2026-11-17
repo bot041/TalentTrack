@@ -1,0 +1,469 @@
+// =====================================================
+// TALENTTRACK DATABASE
+// 17 Tables
+// =====================================================
+
+
+// ---------------- ENUMS ----------------
+
+Enum user_role {
+  admin
+  recruiter
+  hiring_manager
+  interviewer
+}
+
+Enum skill_category {
+  language
+  framework
+  database
+  soft
+  tool
+}
+
+Enum job_status {
+  draft
+  open
+  on_hold
+  closed
+}
+
+Enum candidate_source {
+  portal
+  referral
+  agency
+  walkin
+}
+
+Enum application_stage {
+  applied
+  screening
+  interview
+  offer
+  hired
+  rejected
+  withdrawn
+}
+
+Enum interview_mode {
+  online
+  in_person
+  phone
+}
+
+Enum interview_status {
+  scheduled
+  completed
+  cancelled
+  no_show
+}
+
+Enum panel_recommendation {
+  hire
+  hold
+  reject
+}
+
+Enum offer_status {
+  released
+  accepted
+  declined
+  revoked
+}
+
+
+// ---------------- TABLES ----------------
+
+Table locations {
+  location_id int [pk, increment]
+  parent_location_id int [null, note: 'Self-reference: country > state > city']
+  country_code char(2) [not null, note: 'ISO country code']
+  state varchar(100) [null]
+  city varchar(100) [null]
+  pincode varchar(10) [null]
+  is_active bit [not null, default: 1]
+
+  indexes {
+    parent_location_id
+    (country_code, state, city)
+    pincode
+  }
+}
+
+Table industries {
+  industry_id int [pk, increment]
+  name varchar(100) [not null, unique]
+
+  Note: 'Industry lookup table'
+}
+
+Table skills {
+  skill_id int [pk, increment]
+  name varchar(100) [not null, unique]
+  category skill_category [not null]
+
+  indexes {
+    category
+  }
+
+  Note: 'Skill master lookup table'
+}
+
+
+// ---------------- ORGANISATION ----------------
+
+Table companies {
+  company_id int [pk, increment]
+  name varchar(150) [not null]
+  gst_no varchar(15) [null, unique, note: 'Indian GSTIN']
+  industry_id int [not null]
+  hq_location_id int [not null]
+  created_at datetime2 [not null, default: `GETDATE()`]
+
+  indexes {
+    industry_id
+    hq_location_id
+  }
+}
+
+Table departments {
+  department_id int [pk, increment]
+  company_id int [not null]
+  parent_department_id int [null]
+  name varchar(100) [not null]
+
+  indexes {
+    (company_id, name) [unique]
+    (department_id, company_id) [unique]
+    (parent_department_id, company_id)
+  }
+
+  Note: 'Department hierarchy within a company'
+}
+
+Table users {
+  user_id int [pk, increment]
+  company_id int [not null]
+  email varchar(254) [not null, unique]
+  full_name varchar(150) [not null]
+  role user_role [not null]
+  manager_user_id int [null]
+  is_active bit [not null, default: 1]
+  created_at datetime2 [not null, default: `GETDATE()`]
+
+  indexes {
+    company_id
+    manager_user_id
+  }
+
+  Note: 'Recruiters, hiring managers and interviewers'
+}
+
+
+// ---------------- JOB MANAGEMENT ----------------
+
+Table jobs {
+  job_id int [pk, increment]
+  company_id int [not null]
+  department_id int [not null]
+  location_id int [not null]
+  recruiter_user_id int [not null]
+  title varchar(200) [not null]
+  min_exp decimal(4,1) [not null, default: 0]
+  max_exp decimal(4,1) [not null]
+  min_salary decimal(12,2) [not null]
+  max_salary decimal(12,2) [not null]
+  status job_status [not null, default: 'draft']
+  openings int [not null, default: 1]
+  posted_at datetime2 [null]
+  closed_at datetime2 [null]
+
+  indexes {
+    company_id
+    (department_id, company_id)
+    location_id
+    recruiter_user_id
+    (status, posted_at)
+  }
+
+  checks {
+    `min_exp >= 0 AND min_exp <= max_exp` [name: 'chk_jobs_experience']
+    `min_salary >= 0 AND min_salary <= max_salary` [name: 'chk_jobs_salary']
+    `openings > 0` [name: 'chk_jobs_openings']
+    `closed_at IS NULL OR posted_at IS NULL OR closed_at >= posted_at` [name: 'chk_jobs_dates']
+  }
+}
+
+Table job_skills {
+  job_id int [not null]
+  skill_id int [not null]
+  is_mandatory bit [not null, default: 1]
+  min_years decimal(3,1) [not null, default: 0]
+
+  indexes {
+    (job_id, skill_id) [pk]
+    skill_id
+  }
+
+  checks {
+    `min_years >= 0` [name: 'chk_job_skills_years']
+  }
+
+  Note: 'Composite PK: job_id + skill_id'
+}
+
+
+// ---------------- CANDIDATES ----------------
+
+Table candidates {
+  candidate_id int [pk, increment]
+  first_name varchar(100) [not null]
+  last_name varchar(100) [not null]
+  email varchar(254) [not null, unique]
+  mobile varchar(15) [not null, unique]
+  current_location_id int [null]
+  total_exp decimal(4,1) [not null, default: 0]
+  current_ctc decimal(12,2) [null]
+  expected_ctc decimal(12,2) [null]
+  notice_days int [not null, default: 0]
+  source candidate_source [not null]
+  referred_by_user_id int [null]
+  is_deleted bit [not null, default: 0]
+  created_at datetime2 [not null, default: `GETDATE()`]
+  updated_at datetime2 [not null, default: `GETDATE()`]
+
+  indexes {
+    current_location_id
+    referred_by_user_id
+    is_deleted
+  }
+
+  checks {
+    `total_exp >= 0` [name: 'chk_candidate_experience']
+    `(current_ctc IS NULL OR current_ctc >= 0) AND (expected_ctc IS NULL OR expected_ctc >= 0)` [name: 'chk_candidate_ctc']
+    `notice_days >= 0` [name: 'chk_candidate_notice']
+    `source <> 'referral' OR referred_by_user_id IS NOT NULL` [name: 'chk_candidate_referrer']
+  }
+
+  Note: 'Soft delete using is_deleted'
+}
+
+Table candidate_skills {
+  candidate_id int [not null]
+  skill_id int [not null]
+  years decimal(3,1) [not null, default: 0]
+  proficiency tinyint [not null, note: 'Range: 1 to 5']
+
+  indexes {
+    (candidate_id, skill_id) [pk]
+    skill_id
+  }
+
+  checks {
+    `years >= 0` [name: 'chk_candidate_skill_years']
+    `proficiency BETWEEN 1 AND 5` [name: 'chk_candidate_skill_proficiency']
+  }
+
+  Note: 'Composite PK: candidate_id + skill_id'
+}
+
+Table candidate_education {
+  education_id int [pk, increment]
+  candidate_id int [not null]
+  degree varchar(150) [not null]
+  institute varchar(200) [not null]
+  year_of_passing smallint [not null]
+  percentage decimal(5,2) [null]
+
+  indexes {
+    candidate_id
+  }
+
+  checks {
+    `year_of_passing BETWEEN 1950 AND 2100` [name: 'chk_education_year']
+    `percentage IS NULL OR percentage BETWEEN 0 AND 100` [name: 'chk_education_percentage']
+  }
+
+  Note: 'One candidate can have multiple education records'
+}
+
+
+// ---------------- APPLICATION MANAGEMENT ----------------
+
+Table applications {
+  application_id int [pk, increment]
+  job_id int [not null]
+  candidate_id int [not null]
+  current_stage application_stage [not null, default: 'applied']
+  applied_at datetime2 [not null, default: `GETDATE()`]
+  last_stage_change_at datetime2 [not null, default: `GETDATE()`]
+
+  indexes {
+    (job_id, candidate_id) [unique]
+    candidate_id
+    (job_id, current_stage)
+  }
+}
+
+Table application_stage_history {
+  history_id bigint [pk, increment]
+  application_id int [not null]
+  from_stage application_stage [null]
+  to_stage application_stage [not null]
+  changed_by_user_id int [null]
+  remarks nvarchar(1000) [null]
+  changed_at datetime2 [not null, default: `GETDATE()`]
+
+  indexes {
+    (application_id, changed_at)
+    changed_by_user_id
+  }
+
+  Note: 'Immutable audit trail: insert only, no update or delete'
+}
+
+
+// ---------------- INTERVIEWS ----------------
+
+Table interviews {
+  interview_id int [pk, increment]
+  application_id int [not null]
+  round_no smallint [not null]
+  mode interview_mode [not null]
+  scheduled_at datetime2 [not null]
+  duration_min int [not null, default: 60]
+  status interview_status [not null, default: 'scheduled']
+
+  indexes {
+    (application_id, round_no) [unique]
+    scheduled_at
+  }
+
+  checks {
+    `round_no > 0` [name: 'chk_interview_round']
+    `duration_min > 0` [name: 'chk_interview_duration']
+  }
+}
+
+Table interview_panel {
+  interview_id int [not null]
+  interviewer_user_id int [not null]
+  rating tinyint [null]
+  feedback nvarchar(max) [null]
+  recommendation panel_recommendation [null]
+
+  indexes {
+    (interview_id, interviewer_user_id) [pk]
+    interviewer_user_id
+  }
+
+  checks {
+    `rating IS NULL OR rating BETWEEN 1 AND 5` [name: 'chk_panel_rating']
+  }
+
+  Note: 'Multiple interviewers per interview round'
+}
+
+
+// ---------------- OFFERS ----------------
+
+Table offers {
+  offer_id int [pk, increment]
+  application_id int [not null, unique]
+  offered_ctc decimal(12,2) [not null]
+  joining_date date [not null]
+  status offer_status [not null, default: 'released']
+  released_by_user_id int [null]
+  released_at datetime2 [not null, default: `GETDATE()`]
+
+  indexes {
+    released_by_user_id
+  }
+
+  checks {
+    `offered_ctc > 0` [name: 'chk_offer_ctc']
+  }
+
+  Note: 'One offer per application'
+}
+
+
+// ---------------- API AUDIT LOG ----------------
+
+Table api_audit_log {
+  log_id bigint [pk, increment]
+  user_id int [null, note: 'No FK intentionally: preserve logs after user deletion']
+  endpoint varchar(500) [not null]
+  method varchar(10) [not null]
+  request_json nvarchar(max) [null]
+  status_code smallint [not null]
+  duration_ms int [not null]
+  created_at datetime2 [not null, default: `GETDATE()`]
+
+  indexes {
+    (user_id, created_at)
+    created_at
+  }
+
+  checks {
+    `method IN ('GET', 'POST', 'PUT', 'PATCH', 'DELETE')` [name: 'chk_audit_method']
+    `status_code BETWEEN 100 AND 599` [name: 'chk_audit_status']
+    `duration_ms >= 0` [name: 'chk_audit_duration']
+    `request_json IS NULL OR ISJSON(request_json) = 1` [name: 'chk_audit_json']
+  }
+
+  Note: 'High-volume API audit log; no user FK intentionally'
+}
+
+
+// =====================================================
+// RELATIONSHIPS
+// =====================================================
+
+// Locations
+Ref: locations.parent_location_id > locations.location_id [delete: no action, update: no action]
+
+// Organisation
+Ref: companies.industry_id > industries.industry_id [delete: no action, update: no action]
+Ref: companies.hq_location_id > locations.location_id [delete: no action, update: no action]
+
+Ref: departments.company_id > companies.company_id [delete: no action, update: no action]
+Ref: departments.(parent_department_id, company_id) > departments.(department_id, company_id) [delete: no action, update: no action]
+
+Ref: users.company_id > companies.company_id [delete: no action, update: no action]
+Ref: users.manager_user_id > users.user_id [delete: no action, update: no action]
+
+// Jobs
+Ref: jobs.company_id > companies.company_id [delete: no action, update: no action]
+Ref: jobs.(department_id, company_id) > departments.(department_id, company_id) [delete: no action, update: no action]
+Ref: jobs.location_id > locations.location_id [delete: no action, update: no action]
+Ref: jobs.recruiter_user_id > users.user_id [delete: no action, update: no action]
+
+Ref: job_skills.job_id > jobs.job_id [delete: cascade, update: no action]
+Ref: job_skills.skill_id > skills.skill_id [delete: no action, update: no action]
+
+// Candidates
+Ref: candidates.current_location_id > locations.location_id [delete: set null, update: no action]
+Ref: candidates.referred_by_user_id > users.user_id [delete: set null, update: no action]
+
+Ref: candidate_skills.candidate_id > candidates.candidate_id [delete: cascade, update: no action]
+Ref: candidate_skills.skill_id > skills.skill_id [delete: no action, update: no action]
+
+Ref: candidate_education.candidate_id > candidates.candidate_id [delete: cascade, update: no action]
+
+// Applications
+Ref: applications.job_id > jobs.job_id [delete: no action, update: no action]
+Ref: applications.candidate_id > candidates.candidate_id [delete: no action, update: no action]
+
+Ref: application_stage_history.application_id > applications.application_id [delete: no action, update: no action]
+Ref: application_stage_history.changed_by_user_id > users.user_id [delete: set null, update: no action]
+
+// Interviews
+Ref: interviews.application_id > applications.application_id [delete: no action, update: no action]
+
+Ref: interview_panel.interview_id > interviews.interview_id [delete: no action, update: no action]
+Ref: interview_panel.interviewer_user_id > users.user_id [delete: no action, update: no action]
+
+// Offers
+Ref: offers.application_id - applications.application_id [delete: no action, update: no action]
+Ref: offers.released_by_user_id > users.user_id [delete: set null, update: no action]
